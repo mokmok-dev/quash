@@ -16,6 +16,17 @@ fn der_cert(cert_der: &[u8]) -> CertificateDer<'static> {
     CertificateDer::from(cert_der.to_vec())
 }
 
+fn transport_config() -> Arc<quinn::TransportConfig> {
+    let mut transport = quinn::TransportConfig::default();
+    // Disable MTU discovery and pin the payload to the smallest safe value.
+    // Tailscale and other tunnels cap the path MTU (tailscale0 is 1280), and a
+    // larger probe is silently dropped, which deadlocks the in-flight window.
+    transport.min_mtu(1200);
+    transport.initial_mtu(1200);
+    transport.mtu_discovery_config(None);
+    Arc::new(transport)
+}
+
 pub fn server_config(identity: &Identity) -> CrateResult<quinn::ServerConfig> {
     let cert = der_cert(&identity.cert_der);
     let key = PrivateKeyDer::Pkcs8(identity.key_pkcs8_der.clone().into());
@@ -24,7 +35,9 @@ pub fn server_config(identity: &Identity) -> CrateResult<quinn::ServerConfig> {
         .with_single_cert(vec![cert], key)
         .map_err(Error::BuildServerConfig)?;
     let quic = QuicServerConfig::try_from(rustls_config).map_err(Error::QuicConfig)?;
-    Ok(quinn::ServerConfig::with_crypto(Arc::new(quic)))
+    let mut config = quinn::ServerConfig::with_crypto(Arc::new(quic));
+    config.transport_config(transport_config());
+    Ok(config)
 }
 
 pub fn client_config(expected_fingerprint: [u8; 32]) -> CrateResult<quinn::ClientConfig> {
@@ -35,7 +48,9 @@ pub fn client_config(expected_fingerprint: [u8; 32]) -> CrateResult<quinn::Clien
         }))
         .with_no_client_auth();
     let quic = QuicClientConfig::try_from(rustls_config).map_err(Error::QuicConfig)?;
-    Ok(quinn::ClientConfig::new(Arc::new(quic)))
+    let mut config = quinn::ClientConfig::new(Arc::new(quic));
+    config.transport_config(transport_config());
+    Ok(config)
 }
 
 #[derive(Debug)]
