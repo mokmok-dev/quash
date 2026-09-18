@@ -28,6 +28,17 @@
         treefmt-nix.flakeModule
       ];
 
+      flake = {
+        overlays.default = final: _prev: {
+          quash = inputs.self.packages.${final.stdenv.hostPlatform.system}.default;
+        };
+
+        nixosModules.default = import ./nix/module.nix;
+        nixosModules.quash = import ./nix/module.nix;
+        homeManagerModules.default = import ./nix/hm-module.nix;
+        homeManagerModules.quash = import ./nix/hm-module.nix;
+      };
+
       perSystem =
         { pkgs, system, ... }:
         let
@@ -47,6 +58,14 @@
               overlays = [ rust-overlay.overlays.default ];
             };
           };
+
+          packages.default = craneLib.buildPackage (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+              meta.mainProgram = "quash";
+            }
+          );
 
           checks = {
             clippy = craneLib.cargoClippy (

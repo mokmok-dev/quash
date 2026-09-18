@@ -67,6 +67,10 @@ struct ClientArgs {
     /// SSH port used for the bootstrap connection.
     #[arg(long, default_value_t = 22)]
     ssh_port: u16,
+
+    /// Command run on the server over SSH to print the fingerprint.
+    #[arg(long, default_value = "quash server --print-fingerprint")]
+    bootstrap_command: String,
 }
 
 fn main() -> Result<()> {
@@ -98,8 +102,7 @@ async fn run_server(args: ServerArgs) -> Result<()> {
     let cert_dir = args.cert_dir.unwrap_or_else(cert_mod::default_cert_dir);
 
     if args.print_fingerprint {
-        let identity = cert_mod::load_or_create(&cert_dir)?;
-        println!("{}", identity.fingerprint_hex());
+        println!("{}", cert_mod::fingerprint_hex(&cert_dir)?);
         return Ok(());
     }
 
@@ -110,6 +113,7 @@ async fn run_client(args: ClientArgs) -> Result<()> {
     let bootstrap = args.ssh_target.map(|target| Bootstrap {
         ssh_target: target,
         ssh_port: args.ssh_port,
+        command: args.bootstrap_command,
     });
 
     client::run(ClientOptions {

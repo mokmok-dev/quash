@@ -25,6 +25,13 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error("failed to set permissions on {path}: {source}")]
+    SetPermissions {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("failed to parse certificate PEM: {0}")]
     ParseCertificate(#[source] std::io::Error),
 

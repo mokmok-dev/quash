@@ -16,6 +16,7 @@ pub struct ClientOptions {
 pub struct Bootstrap {
     pub ssh_target: String,
     pub ssh_port: u16,
+    pub command: String,
 }
 
 pub async fn run(opts: ClientOptions) -> Result<()> {
@@ -104,12 +105,15 @@ async fn fetch_fingerprint(bootstrap: &Bootstrap) -> Result<[u8; 32]> {
         .arg("-o")
         .arg("ClearAllForwardings=yes")
         .arg(&bootstrap.ssh_target)
-        .arg("quash server --print-fingerprint")
+        .args(bootstrap.command.split_whitespace())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
 
-    debug!("bootstrapping fingerprint via ssh {}", bootstrap.ssh_target);
+    debug!(
+        "bootstrapping fingerprint via ssh {}: {}",
+        bootstrap.ssh_target, bootstrap.command
+    );
     let output = cmd.output().await.map_err(Error::BootstrapSpawn)?;
     if !output.status.success() {
         return Err(Error::BootstrapExit(output.status));

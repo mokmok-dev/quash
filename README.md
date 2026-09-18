@@ -56,6 +56,52 @@ To skip the bootstrap and pin a fingerprint directly:
 quash client --remote example.com:4433 --fingerprint <64 hex chars>
 ```
 
+## Nix
+
+The flake exposes both a NixOS module and a home-manager module, so importing
+the flake is enough to run the server and to route hosts over QUIC.
+
+Server (NixOS):
+
+```nix
+{
+  inputs.quash.url = "github:mokmok-dev/quash";
+
+  # in a NixOS configuration
+  imports = [ inputs.quash.nixosModules.default ];
+  services.quash = {
+    enable = true;
+    listen = "0.0.0.0:4433";
+    proxyTo = "127.0.0.1:22";
+    openFirewall = true;
+  };
+}
+```
+
+The server stores its certificate in `/var/lib/quash`. The private key stays
+`0600`, while the certificate is `0644` so that a logged-in user can run
+`quash server --print-fingerprint` to bootstrap a client.
+
+Client (home-manager):
+
+```nix
+{
+  imports = [ inputs.quash.homeManagerModules.default ];
+  programs.quash = {
+    enable = true;
+    hosts."*.ts.net" = {
+      remote = "100.75.236.9:4433";
+      sshTarget = "user@100.75.236.9";
+    };
+  };
+}
+```
+
+This writes a `ProxyCommand` for each host pattern into `~/.ssh/config`, so
+plain `ssh`, `scp`, and VS Code Remote transparently use QUIC. When the server
+sets `QUASH_CERT_DIR` to the same directory the service uses, the bootstrap
+command resolves the fingerprint without extra flags.
+
 ## Scope
 
 This is an early prototype. It does not yet implement TCP fallback, keepalive

@@ -21,6 +21,9 @@ impl Identity {
 
 #[must_use]
 pub fn default_cert_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("QUASH_CERT_DIR") {
+        return PathBuf::from(dir);
+    }
     let base = std::env::var_os("XDG_CONFIG_HOME").map_or_else(
         || {
             let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
@@ -62,11 +65,48 @@ pub fn load_or_create(dir: &Path) -> Result<Identity> {
             source,
         }
     })?;
+    set_cert_permissions(&cert_path, &key_path)?;
 
     Ok(Identity {
         cert_der,
         key_pkcs8_der,
     })
+}
+
+#[cfg(unix)]
+fn set_cert_permissions(cert_path: &Path, key_path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let cert_mode = std::fs::Permissions::from_mode(0o644);
+    std::fs::set_permissions(cert_path, cert_mode).map_err(|source| Error::SetPermissions {
+        path: cert_path.to_path_buf(),
+        source,
+    })?;
+
+    let key_mode = std::fs::Permissions::from_mode(0o600);
+    std::fs::set_permissions(key_path, key_mode).map_err(|source| Error::SetPermissions {
+        path: key_path.to_path_buf(),
+        source,
+    })?;
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_cert_permissions(_cert_path: &Path, _key_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Read only the public certificate so that the fingerprint can be printed
+/// without access to the private key. Falls back to creating the identity when
+/// no certificate exists yet.
+pub fn fingerprint_hex(dir: &Path) -> Result<String> {
+    let cert_path = dir.join("cert.pem");
+    if !cert_path.exists() {
+        return Ok(load_or_create(dir)?.fingerprint_hex());
+    }
+    let cert_der = read_cert_der(&cert_path)?;
+    Ok(hex::encode(Sha256::digest(&cert_der)))
 }
 
 fn read_cert_der(path: &Path) -> Result<Vec<u8>> {
