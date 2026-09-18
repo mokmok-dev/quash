@@ -80,6 +80,9 @@ pub async fn run(opts: ClientOptions) -> Result<()> {
                 .write_all(&buf[..n])
                 .await
                 .map_err(Error::StdoutWrite)?;
+            // stdout is line buffered, so binary protocol data without a
+            // newline would otherwise sit in the buffer and stall peers.
+            stdout.flush().await.map_err(Error::StdoutWrite)?;
         }
         stdout.flush().await.ok();
         Ok::<_, Error>(())
