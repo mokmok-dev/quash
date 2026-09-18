@@ -85,10 +85,9 @@ pub async fn run(opts: ClientOptions) -> Result<()> {
         Ok::<_, Error>(())
     };
 
-    tokio::select! {
-        r = to_quic => r?,
-        r = to_stdout => r?,
-    }
+    let (to_quic_res, to_stdout_res) = tokio::join!(to_quic, to_stdout);
+    to_quic_res?;
+    to_stdout_res?;
 
     conn.close(0u32.into(), b"done");
     endpoint.wait_idle().await;

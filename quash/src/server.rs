@@ -95,9 +95,8 @@ async fn proxy_stream(
         Ok::<_, Error>(())
     };
 
-    tokio::select! {
-        r = to_remote => r?,
-        r = to_local => r?,
-    }
+    let (to_remote_res, to_local_res) = tokio::join!(to_remote, to_local);
+    to_remote_res?;
+    to_local_res?;
     Ok(())
 }
