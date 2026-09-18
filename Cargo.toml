@@ -1,8 +1,31 @@
 [workspace]
-members = []
+members = ["quash"]
 resolver = "3"
 
 [workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+quinn = "0.11"
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "std",
+] }
+rustls-pemfile = "2"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "io-util",
+  "io-std",
+  "net",
+  "process",
+  "time",
+  "signal",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [workspace.lints.clippy]
 all = "deny"
