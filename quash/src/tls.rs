@@ -5,6 +5,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, ServerConfig, SignatureScheme};
 use std::sync::Arc;
+use std::time::Duration;
 
 type CrateResult<T> = std::result::Result<T, Error>;
 
@@ -24,6 +25,11 @@ fn transport_config() -> Arc<quinn::TransportConfig> {
     transport.min_mtu(1200);
     transport.initial_mtu(1200);
     transport.mtu_discovery_config(None);
+    // Keep sending while idle so that a network handover (for example Wi-Fi to
+    // cellular) can migrate the connection to the new path instead of idling
+    // out. The interval must stay below the idle timeout of both peers.
+    transport.keep_alive_interval(Some(Duration::from_secs(5)));
+    transport.max_idle_timeout(Some(quinn::VarInt::from_u32(60_000).into()));
     Arc::new(transport)
 }
 
