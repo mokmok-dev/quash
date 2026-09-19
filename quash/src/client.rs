@@ -2,6 +2,7 @@ use crate::error::{Error, Result};
 use crate::tls;
 use std::net::SocketAddr;
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::{debug, info};
@@ -88,12 +89,28 @@ pub async fn run(opts: ClientOptions) -> Result<()> {
         Ok::<_, Error>(())
     };
 
-    let (to_quic_res, to_stdout_res) = tokio::join!(to_quic, to_stdout);
-    to_quic_res?;
-    to_stdout_res?;
+    let proxy = async {
+        let (to_quic_res, to_stdout_res) = tokio::join!(to_quic, to_stdout);
+        to_quic_res?;
+        to_stdout_res?;
+        Ok::<_, Error>(())
+    };
+
+    // A suspended process (macOS App Nap, system sleep) can let the QUIC
+    // connection time out while both directions are parked on a read. Without
+    // racing `closed`, the client stays blocked on stdin and only notices the
+    // dead connection once the user presses a key, which stalls the SSH
+    // session. Exiting promptly instead lets SSH reconnect right away.
+    tokio::select! {
+        result = proxy => result?,
+        _ = conn.closed() => {
+            debug!("connection closed while proxying; exiting for SSH to reconnect");
+        }
+    }
 
     conn.close(0u32.into(), b"done");
-    endpoint.wait_idle().await;
+    // The peer may already be gone, in which case `wait_idle` never resolves.
+    let _ = tokio::time::timeout(Duration::from_secs(1), endpoint.wait_idle()).await;
     Ok(())
 }
 

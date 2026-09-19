@@ -90,12 +90,18 @@ fn main() -> Result<()> {
         .build()
         .map_err(Error::Runtime)?;
 
-    runtime.block_on(async move {
+    let result = runtime.block_on(async move {
         match cli.command {
             Commands::Server(args) => run_server(args).await,
             Commands::Client(args) => run_client(args).await,
         }
-    })
+    });
+
+    // `tokio::io::stdin` reads on a blocking thread. Dropping the runtime waits
+    // for that thread, which never returns while stdin stays open, so a client
+    // that finished early would hang forever instead of letting SSH reconnect.
+    runtime.shutdown_timeout(std::time::Duration::from_millis(100));
+    result
 }
 
 async fn run_server(args: ServerArgs) -> Result<()> {
