@@ -50,4 +50,4 @@ name = "quash"
 
 [workspace.package]
 edition = "2024"
-version = "2026.9.18"
+version = "2026.9.20"

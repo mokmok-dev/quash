@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "quash"
-version = "2026.9.18"
+version = "2026.9.20"
 dependencies = [
  "bytes",
  "clap",
