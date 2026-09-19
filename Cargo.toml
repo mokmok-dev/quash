@@ -4,6 +4,8 @@ resolver = "3"
 
 [workspace.dependencies]
 clap = { version = "4", features = ["derive"] }
+bytes = "1"
+getrandom = "0.4"
 hex = "0.4"
 quinn = "0.11"
 rcgen = "0.14"
@@ -23,6 +25,7 @@ tokio = { version = "1", features = [
   "process",
   "time",
   "signal",
+  "sync",
 ] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

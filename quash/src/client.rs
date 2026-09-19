@@ -1,11 +1,16 @@
 use crate::error::{Error, Result};
+use crate::link::{Link, LinkEnd, new_session_id};
+use crate::session::SessionState;
 use crate::tls;
+use bytes::Bytes;
 use std::net::SocketAddr;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, warn};
 
 pub struct ClientOptions {
     pub remote: SocketAddr,
@@ -19,6 +24,11 @@ pub struct Bootstrap {
     pub ssh_port: u16,
     pub command: String,
 }
+
+/// Keep retrying for this long after a link drops before giving up, so a
+/// transient network handover is transparent but a dead server still surfaces
+/// an error to SSH instead of hanging forever.
+const MAX_RECONNECT_WINDOW: Duration = Duration::from_secs(600);
 
 pub async fn run(opts: ClientOptions) -> Result<()> {
     let fingerprint = if let Some(fp) = &opts.fingerprint {
@@ -39,79 +49,117 @@ pub async fn run(opts: ClientOptions) -> Result<()> {
         quinn::Endpoint::client(bind).map_err(|source| Error::Bind { addr: bind, source })?;
     endpoint.set_default_client_config(client_config);
 
-    info!("connecting to {} over QUIC", opts.remote);
-    let conn = endpoint
-        .connect(opts.remote, &opts.server_name)
-        .map_err(|source| Error::Connect {
-            addr: opts.remote,
-            source,
-        })?
-        .await
-        .map_err(Error::Handshake)?;
+    let state = Arc::new(SessionState::new());
+    let stdin_task = spawn_stdin_reader(Arc::clone(&state));
 
-    let (mut send, mut recv) = conn.open_bi().await.map_err(Error::OpenStream)?;
+    let mut stdout = tokio::io::stdout();
+    let outcome = proxy_loop(&endpoint, &opts, &state, &mut stdout, &stdin_task).await;
 
-    let to_quic = async {
-        let mut stdin = tokio::io::stdin();
-        let mut buf = vec![0u8; 16 * 1024];
-        loop {
-            let n = stdin.read(&mut buf).await.map_err(Error::StdinRead)?;
-            if n == 0 {
-                break;
-            }
-            send.write_all(&buf[..n]).await.map_err(Error::QuicWrite)?;
-        }
-        let _ = send.finish();
-        Ok::<_, Error>(())
-    };
+    stdin_task.abort();
+    outcome?;
 
-    let to_stdout = async {
-        let mut stdout = tokio::io::stdout();
-        let mut buf = vec![0u8; 16 * 1024];
-        loop {
-            let n = recv
-                .read(&mut buf)
-                .await
-                .map_err(Error::QuicRead)?
-                .unwrap_or(0);
-            if n == 0 {
-                break;
-            }
-            stdout
-                .write_all(&buf[..n])
-                .await
-                .map_err(Error::StdoutWrite)?;
-            // stdout is line buffered, so binary protocol data without a
-            // newline would otherwise sit in the buffer and stall peers.
-            stdout.flush().await.map_err(Error::StdoutWrite)?;
-        }
-        stdout.flush().await.ok();
-        Ok::<_, Error>(())
-    };
-
-    let proxy = async {
-        let (to_quic_res, to_stdout_res) = tokio::join!(to_quic, to_stdout);
-        to_quic_res?;
-        to_stdout_res?;
-        Ok::<_, Error>(())
-    };
-
-    // A suspended process (macOS App Nap, system sleep) can let the QUIC
-    // connection time out while both directions are parked on a read. Without
-    // racing `closed`, the client stays blocked on stdin and only notices the
-    // dead connection once the user presses a key, which stalls the SSH
-    // session. Exiting promptly instead lets SSH reconnect right away.
-    tokio::select! {
-        result = proxy => result?,
-        _ = conn.closed() => {
-            debug!("connection closed while proxying; exiting for SSH to reconnect");
-        }
-    }
-
-    conn.close(0u32.into(), b"done");
     // The peer may already be gone, in which case `wait_idle` never resolves.
     let _ = tokio::time::timeout(Duration::from_secs(1), endpoint.wait_idle()).await;
     Ok(())
+}
+
+/// Reads stdin for the whole session, buffering into the send queue even while
+/// the link is down so a reconnect can replay the backlog.
+fn spawn_stdin_reader(state: Arc<SessionState>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut stdin = tokio::io::stdin();
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            let n = match stdin.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            state
+                .send
+                .lock()
+                .await
+                .push(Bytes::copy_from_slice(&buf[..n]));
+            state.send_ready.notify_one();
+        }
+        state.fin.store(true, Ordering::SeqCst);
+        state.send_ready.notify_one();
+    })
+}
+
+async fn proxy_loop(
+    endpoint: &quinn::Endpoint,
+    opts: &ClientOptions,
+    state: &Arc<SessionState>,
+    stdout: &mut tokio::io::Stdout,
+    stdin_task: &tokio::task::JoinHandle<()>,
+) -> Result<()> {
+    let mut resume = false;
+    let mut session_id = new_session_id();
+    let mut backoff = Duration::from_millis(250);
+    // Set when a link drops; bounds how long we keep retrying before letting
+    // SSH see the failure.
+    let mut give_up_at: Option<tokio::time::Instant> = None;
+    let gave_up = |give_up_at: &Option<tokio::time::Instant>| {
+        give_up_at.is_some_and(|t| tokio::time::Instant::now() >= t)
+    };
+    loop {
+        let mut link = match Link::connect(endpoint, opts.remote, &opts.server_name).await {
+            Ok(link) => link,
+            Err(err) => {
+                if stdin_task.is_finished() {
+                    return Ok(());
+                }
+                if gave_up(&give_up_at) {
+                    return Err(Error::ReconnectGaveUp);
+                }
+                warn!("connect failed ({err:#}); retrying in {backoff:?}");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(5));
+                continue;
+            }
+        };
+        match link.client_handshake(state, &session_id, resume).await {
+            Ok(()) => {}
+            Err(Error::SessionRejected) => {
+                // The server forgot the session (restart or idle reap). Start a
+                // fresh one; already-sent bytes cannot be recovered, but the
+                // SSH layer will notice and reconnect.
+                warn!("session expired on the server; starting a new session");
+                session_id = new_session_id();
+                resume = false;
+                state.send.lock().await.reset();
+                state.recv.lock().await.reset();
+                link.close();
+                continue;
+            }
+            Err(err) => {
+                if gave_up(&give_up_at) {
+                    return Err(Error::ReconnectGaveUp);
+                }
+                warn!("handshake failed ({err:#}); retrying");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(5));
+                continue;
+            }
+        }
+        backoff = Duration::from_millis(250);
+        debug!("link established (resume={resume})");
+
+        let end = link.run(state, stdout, true).await;
+        link.close();
+        match end {
+            Ok(LinkEnd::PeerFin) => {
+                debug!("peer finished; closing");
+                return Ok(());
+            }
+            Ok(LinkEnd::Disconnected) => {
+                resume = true;
+                give_up_at = Some(tokio::time::Instant::now() + MAX_RECONNECT_WINDOW);
+                debug!("link lost; reconnecting");
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 async fn fetch_fingerprint(bootstrap: &Bootstrap) -> Result<[u8; 32]> {

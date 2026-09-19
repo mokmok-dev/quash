@@ -102,8 +102,21 @@ plain `ssh`, `scp`, and VS Code Remote transparently use QUIC. When the server
 sets `QUASH_CERT_DIR` to the same directory the service uses, the bootstrap
 command resolves the fingerprint without extra flags.
 
+## Sessions
+
+A session is identified by a random id and outlives any single QUIC
+connection. If the connection drops (network handover, or the client being
+suspended by macOS App Nap long enough to hit the QUIC idle timeout), the
+client reconnects and both ends resume the byte streams from the offsets the
+peer last applied. Bytes produced while the link was down are buffered and
+replayed, duplicates are discarded, and sshd is never reconnected, so the
+SSH session continues without re-authentication.
+
+Retries stop after ten minutes without a link so a dead server surfaces an
+error to SSH rather than hanging forever.
+
 ## Scope
 
-This is an early prototype. It does not yet implement TCP fallback, keepalive
-tuning, or certificate rotation. The QUIC hop appears to SSH exactly like a
-TCP socket, so host key management continues to work through `known_hosts`.
+This is an early prototype. It does not yet implement TCP fallback or
+certificate rotation. The QUIC hop appears to SSH exactly like a TCP socket,
+so host key management continues to work through `known_hosts`.

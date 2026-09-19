@@ -1,7 +1,10 @@
 mod cert;
 mod client;
 mod error;
+mod link;
+mod proto;
 mod server;
+mod session;
 mod tls;
 
 use crate::cert as cert_mod;
@@ -74,15 +77,23 @@ struct ClientArgs {
 }
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    // The client runs as an SSH ProxyCommand, so anything it logs goes to the
+    // user's terminal; keep it quiet unless the user opts in. The server is a
+    // long-running service and benefits from informational logs.
+    let default_level = match cli.command {
+        Commands::Server(_) => "info",
+        Commands::Client(_) => "warn",
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),
         )
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
     tls_mod::install_crypto_provider();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

@@ -85,14 +85,26 @@ pub enum Error {
     #[error("QUIC handshake failed: {0}")]
     Handshake(#[source] quinn::ConnectionError),
 
+    #[error("timed out connecting to {0}")]
+    ConnectTimeout(std::net::SocketAddr),
+
+    #[error("server rejected the session id; it may have expired")]
+    SessionRejected,
+
+    #[error("link closed")]
+    LinkClosed,
+
+    #[error("gave up reconnecting after the connection stayed down")]
+    ReconnectGaveUp,
+
+    #[error("session I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("failed to open QUIC stream: {0}")]
     OpenStream(#[source] quinn::ConnectionError),
 
-    #[error("failed to read from QUIC stream: {0}")]
-    QuicRead(#[source] quinn::ReadError),
-
-    #[error("failed to write to QUIC stream: {0}")]
-    QuicWrite(#[source] quinn::WriteError),
+    #[error("failed to accept QUIC stream: {0}")]
+    AcceptStream(#[source] quinn::ConnectionError),
 
     #[error("failed to connect to {addr}: {source}")]
     TcpConnect {
@@ -100,15 +112,6 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
-
-    #[error("TCP read failed: {0}")]
-    TcpRead(#[source] std::io::Error),
-
-    #[error("TCP write failed: {0}")]
-    TcpWrite(#[source] std::io::Error),
-
-    #[error("stdin read failed: {0}")]
-    StdinRead(#[source] std::io::Error),
 
     #[error("stdout write failed: {0}")]
     StdoutWrite(#[source] std::io::Error),
